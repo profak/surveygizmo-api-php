@@ -65,7 +65,7 @@ class SurveyResponse
 			"/^data\[\S+\]\[(value|comment)\]$/i"
 		);
 		
-        $_params = http_build_query($master->getValidParameters($parameters, array(), $regex_params));
+        $_params = http_build_query($this->master->getValidParameters($parameters, array(), $regex_params));
         return $this->master->call('survey/' . $surveyId . '/surveyresponse/', 'PUT', $_params);
     }
 	
@@ -86,7 +86,7 @@ class SurveyResponse
 			"/^data\[\S+\]\[(value|comment)\]$/i"
 		);
 		
-        $_params = http_build_query($master->getValidParameters($parameters, array(), $regex_params));
+        $_params = http_build_query($this->master->getValidParameters($parameters, array(), $regex_params));
         return $this->master->call('survey/' . $surveyId . '/surveyresponse/' . $responseId, 'POST', $_params);
     }
 	
