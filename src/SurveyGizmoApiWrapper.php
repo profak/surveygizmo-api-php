@@ -3,12 +3,18 @@
  * SurveyGizmo REST API wrapper
  *
  * @package surveygizmo-api-php
- * @author Nathan Sollenberger <nsollenberger@gmail.com>
+ * @author Nathan Sollenberger <nate@spacenate.com>
  */
 namespace spacenate;
 
+use spacenate\Http\HttpClientInterface;
+use spacenate\Http\RequestsClient;
+
+require_once 'Http/HttpClientInterface.php';
+require_once 'Http/RequestsClient.php';
 require_once 'SurveyGizmo/Account.php';
 require_once 'SurveyGizmo/AccountTeams.php';
+require_once 'SurveyGizmo/AccountUser.php';
 require_once 'SurveyGizmo/EmailMessage.php';
 require_once 'SurveyGizmo/OAuth.php';
 require_once 'SurveyGizmo/Survey.php';
@@ -29,7 +35,7 @@ class SurveyGizmoApiWrapper
 
     public $Account;
     public $AccountTeams;
-    //public $AccountUser;
+    public $AccountUser;
     //public $ContactList;
     public $Survey;
     public $SurveyPage;
@@ -42,21 +48,21 @@ class SurveyGizmoApiWrapper
     //public $SuveyStatistic;
     //public $SurveyReport;
 
-    protected $email;
-    protected $password;
-    protected $auth_type;
+    protected $userId;
+    protected $secret;
+    protected $authType;
     protected $domain;
     protected $version;
     protected $format;
-    protected $ch;
+    protected $httpClient;
     protected $debug;
 
     /**
-     * Constructor sets options, initializes curl handler as well as API objects
+     * Constructor sets options, initialize API objects
      *
-     * @param string $email (optional) email address to authenticate with
-     * @param string $password (optional) md5 or plaintext password to authenticate with
-     * @param string $auth_type (optional) which auth type to use, "md5" or "pass"
+     * @param string $userId (optional) API token, email address, or OAuth access token to authenticate with
+     * @param string $secret (optional) API token secret, md5, plaintext password or OAuth access token secret to authenticate with
+     * @param string $authType (optional) which authentication type to use, "api_token", "md5", "pass", or "oauth". Defaults to "api_token"
      * @param array $opts (optional) key-value pairs of one or more of the following keys:
      *        - "timeout" int connection timeout limit
      *        - "debug" bool enable debug logging
@@ -64,10 +70,10 @@ class SurveyGizmoApiWrapper
      *        - "domain" string domain name to make api calls against
      */
     // @todo move all options to config array, with logic in its own method!
-    public function __construct( $email = "", $password = "", $auth_type = "pass", $opts = array() )
+    public function __construct( $userId = null, $secret = null, $authType = null, $opts = array() )
     {
-        if ($email && $password) {
-            $this->setCredentials($email, $password, $auth_type);
+        if ($userId) {
+            $this->setCredentials($userId, $secret, $authType);
         }
 
         $this->domain = (!isset($opts['domain']) || !is_string($opts['domain'])) ? "restapi.surveygizmo.com" : $opts['domain'];
@@ -81,22 +87,18 @@ class SurveyGizmoApiWrapper
         }
         if (isset($opts['format']) && in_array($opts['format'], array("json", "pson", "xml", "debug"))) {
             $this->format = $opts['format'];
-        }
-        else {
+        } else {
             $this->format = "json";
         }
-
-        $this->ch = curl_init();
-
-        curl_setopt($this->ch, CURLOPT_USERAGENT, 'SurveyGizmo-API-PHP/0.3');
-        curl_setopt($this->ch, CURLOPT_HEADER, false);
-        curl_setopt($this->ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($this->ch, CURLOPT_CONNECTTIMEOUT, 30);
-        curl_setopt($this->ch, CURLOPT_TIMEOUT, $opts['timeout']);
+        if (isset($opts['httpClient']) && $opts['httpClient'] instanceof HttpClientInterface) {
+            $this->httpClient = $opts['httpClient'];
+        } else {
+            $this->httpClient = new RequestsClient();
+        }
 
         $this->Account = new SurveyGizmo\Account($this);
         $this->AccountTeams = new SurveyGizmo\AccountTeams($this);
-        //this->AccountUser = new SurveyGizmo\AccountUser($this);
+        $this->AccountUser = new SurveyGizmo\AccountUser($this);
         //$this->ContactList = new SurveyGizmo\ContactList($this);
         $this->Survey = new SurveyGizmo\Survey($this);
         $this->SurveyPage = new SurveyGizmo\SurveyPage($this);
@@ -105,48 +107,42 @@ class SurveyGizmoApiWrapper
         $this->SurveyCampaign = new SurveyGizmo\SurveyCampaign($this);
         //$this->Contact = new SurveyGizmo\Contact($this);
         $this->EmailMessage = new SurveyGizmo\EmailMessage($this);
-        $this->SurveyResponse = new SurveyGizmo\SurveyOption($this);
+        $this->SurveyResponse = new SurveyGizmo\SurveyResponse($this);
         //$this->SuveyStatistic = new SurveyGizmo\SuveyStatistic($this);
         //$this->SurveyReport = new SurveyGizmo\SurveyReport($this);
 
-
-        $oauth_config = array
-        (
-            'user_agent'                 => 'SurveyGizmo-API-PHP/0.3',
-            'host'                       => 'restapi.surveygizmo.com/' . $this->version
+        // tmhOAuth config
+        $oauth_config = array(
+            'user_agent'    => 'SurveyGizmo-API-PHP/0.3',
+            'host'          => $this->domain . $this->version
         );
         $this->oauth = new SurveyGizmo\OAuth($this, $oauth_config);
     }
 
     /**
-     * Destructor closes curl handler
-     */
-    public function __destruct() {
-        if(is_resource($this->ch)) {
-            curl_close($this->ch);
-        }
-    }
-
-    /**
      * Specify the credentials to use when connecting to the API
      *
-     * @param string $email email address (or Access Token) to authenticate with
-     * @param string $password md5 or plaintext password (or Access Token Secret) to authenticate with
-     * @param string $auth_type (optional) which auth type to use, "md5", "pass", or "oauth". Defaults to "pass"
+     * @param string $userId API token, email address, or OAuth access token to authenticate with
+     * @param string $secret (optional) API token secret, md5, plaintext password or OAuth access token secret to authenticate with
+     * @param string $authType (optional) which authentication type to use, "api_token", "md5", "pass", or "oauth". Defaults to "api_token"
      * @return bool credentials set successfully
      */
-    public function setCredentials( $email, $password, $auth_type = "pass" )
+    public function setCredentials( $userId, $secret = null, $authType = null )
     {
-        if (!in_array($auth_type, array("md5", "pass", "oauth"))) {
+        if ($authType === null) {
+            $authType = "api_token";
+        }
+        if (!in_array($authType, array("api_token", "md5", "pass", "oauth"))) {
             return false;
         }
-        if ("oauth" === $auth_type) {
-            return $this->oauth->setTokenAndSecret($email, $password);
-            // setTokenAndSecret also sets auth_type
+
+        if ("oauth" === $authType) {
+            return $this->oauth->setTokenAndSecret($userId, $secret);
+            // setTokenAndSecret also calls SurveyGizmoApiWrapper::setAuthTypeOAuth()
         } else {
-            $this->email = $email;
-            $this->password = $password;
-            $this->auth_type = $auth_type;
+            $this->userId = $userId;
+            $this->secret = $secret;
+            $this->authType = $authType;
             return true;
         }
     }
@@ -155,13 +151,13 @@ class SurveyGizmoApiWrapper
      * Authenticate using OAuth
      *
      * A validated Access Token and Token Secret must be set first
-     * using astronate\SurveyGizmo\OAuth::setTokenAndSecret()
+     * using spacenate\SurveyGizmo\OAuth::setTokenAndSecret()
      *
      * @return null
      */
     public function setAuthTypeOAuth()
     {
-        $this->auth_type = "oauth";
+        $this->authType = "oauth";
     }
 
     /**
@@ -171,17 +167,21 @@ class SurveyGizmoApiWrapper
      */
     public function getCredentials()
     {
-        if (isset($this->email) && isset($this->password)) {
-            switch ($this->auth_type) {
+        if (isset($this->userId)) {
+            switch ($this->authType) {
                 case "oauth":
                     return false;
+                case "api_token":
+                    $token_secret = ($this->secret) ? "&api_token_secret=" . $this->secret : "";
+                    return "api_token=" . $this->userId . $token_secret;
                 case "md5":
-                    return "user:md5=" . $this->email . ":" . $this->password;
+                    return "user:md5=" . $this->userId . ":" . $this->secret;
                 default:
-                    return "user:pass=" . $this->email . ":" . $this->password;
+                    return "user:pass=" . $this->userId . ":" . $this->secret;
             }
+        } else {
+            return false;
         }
-        else return false;
     }
 
     /**
@@ -192,7 +192,7 @@ class SurveyGizmoApiWrapper
     public function testCredentials()
     {
         $params = array('page'=>1,'resultsperpage'=>0);
-        if ($this->auth_type === "oauth") {
+        if ($this->authType === "oauth") {
             $this->oauth->request("GET", "https://{$this->domain}/{$this->version}/survey", $params);
             $output = $this->oauth->response['response'];
         } else {
@@ -202,8 +202,7 @@ class SurveyGizmoApiWrapper
         $output = json_decode($output);
         if (isset($output->result_ok) && $output->result_ok) {
             return true;
-        }
-        else {
+        } else {
             return false;
         }
     }
@@ -214,13 +213,14 @@ class SurveyGizmoApiWrapper
      * @param string $format either "json", "pson", "xml", or "debug"
      * @return bool format set successfully
      */
-    public function setFormat( $format )
+    public function setOutputFormat( $format )
     {
         if (in_array($format, array("json", "pson", "xml", "debug"))) {
             $this->format = $format;
             return true;
+        } else {
+            return false;
         }
-        else return false;
     }
 
     /**
@@ -294,7 +294,7 @@ class SurveyGizmoApiWrapper
         $format = in_array($format, array("json", "pson", "xml", "debug")) ? $format : $this->format;
         $url    = "https://{$this->domain}/{$this->version}/{$endPoint}.{$format}";
 
-        if ($this->auth_type === "oauth") {
+        if ($this->authType === "oauth") {
             $this->log("Using OAuth");
             // turn query string in to key=>value array
             parse_str($params, $params);
@@ -303,43 +303,18 @@ class SurveyGizmoApiWrapper
         }
 
         $creds  = $this->getCredentials();
+        // throw error
         if (!$creds) return false;
 
-        $ch = $this->ch;
         $url .= "?_method={$method}&{$creds}";
         if ($params) $url .= '&' . $params;
 
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_VERBOSE, $this->debug);
-
-        $start = microtime(true);
-        $this->log('Call to ' . $url);
-        if($this->debug) {
-            $curl_buffer = fopen('php://memory', 'w+');
-            curl_setopt($ch, CURLOPT_STDERR, $curl_buffer);
+        $this->httpClient->sendRequest($url);
+        if ($this->httpClient->getStatusCode() !== 200) {
+            // handle errors
+            return false;
         }
-
-        $response_body = curl_exec($ch);
-
-        $info = curl_getinfo($ch);
-        $time = microtime(true) - $start;
-        if($this->debug) {
-            rewind($curl_buffer);
-            $this->log(stream_get_contents($curl_buffer));
-            fclose($curl_buffer);
-        }
-        $this->log('Completed in ' . number_format($time * 1000, 2) . 'ms');
-        $this->log('Got response: ' . $response_body);
-
-        if(curl_error($ch)) {
-            throw new Exception("API call to $url failed: " . curl_error($ch));
-        }
-
-        if(floor($info['http_code'] / 100) >= 4) {
-            throw new Exception($result);
-        }
-
-        return $response_body;
+        return $this->httpClient->getResponseBody();
     }
 
     /**
@@ -355,4 +330,3 @@ class SurveyGizmoApiWrapper
             print $msg . "\n";
     }
 }
-

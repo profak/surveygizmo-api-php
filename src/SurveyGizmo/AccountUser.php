@@ -1,6 +1,6 @@
 <?php
 /**
- * AccountTeams Object
+ * AccountUser Object
  *
  * @package surveygizmo-api-php
  * @author Nathan Sollenberger <nsollenberger@gmail.com>
@@ -10,11 +10,11 @@ namespace spacenate\SurveyGizmo;
 use spacenate\SurveyGizmoApiWrapper;
 
 /**
- * AccountTeams class provides access to the AccountTeams object
+ * AccountUser class provides access to the AccountUser object
  *
  * @package surveygizmo-api-php
  */
-class AccountTeams
+class AccountUser
 {
     public function __construct(SurveyGizmoApiWrapper $master) {
         $this->master = $master;
@@ -23,12 +23,15 @@ class AccountTeams
     /**
      * List all of the teams in an account
      *
-     * @param bool $showDeleted (optional) Include teams that have been deleted
+     * @param string|int $page (optional) page of results to fetch
+     * @param string|int $limit (optional) number of results to fetch
      * @return string SG API object according to format specified in SurveyGizmoApiWrapper
      */
-    public function getList( $showDeleted = false )
+    public function getList( $page = 1, $limit = 50 )
     {
-        $_params = http_build_query(array("showdeleted" => $showDeleted));
+        $page = ($page) ? $page : 1;
+        $limit = ($limit) ? $limit : 50;
+        $_params = http_build_query(array("resultsperpage" => $limit, "page" => $page));
         return $this->master->call('accountteams/', 'GET', $_params);
     }
 
